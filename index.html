@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>光華國小PTC課表查詢系統</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --text: #1e293b;
+            --border: #e2e8f0;
+            --lunch-bg: #f1f5f9;
+        }
+
+        body {
+            font-family: "Microsoft JhengHei", -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 10px;
+        }
+
+        .container { max-width: 900px; margin: 0 auto; }
+
+        header { text-align: center; margin-bottom: 20px; }
+        header h1 { color: var(--primary); font-size: 1.5rem; margin-bottom: 5px; }
+
+        .search-controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            background: #fff;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        select, button {
+            padding: 10px 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 1rem;
+            outline: none;
+        }
+
+        button {
+            background: var(--primary);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .timetable-wrapper {
+            background: var(--card);
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+            overflow-x: auto;
+        }
+
+        table { width: 100%; border-collapse: collapse; min-width: 600px; }
+        th, td { border: 1px solid var(--border); padding: 12px; text-align: center; }
+        th { background: #f8fafc; color: #64748b; }
+
+        .period-cell { background: #f1f5f9; font-weight: bold; width: 80px; }
+        .subject { color: var(--primary); font-weight: bold; display: block; }
+        .teacher-label { font-size: 0.75rem; color: #64748b; margin-top: 2px; display: block; }
+        .lunch-row { background: var(--lunch-bg); font-weight: bold; color: #94a3b8; letter-spacing: 0.5em; }
+
+        .status-bar {
+            text-align: center;
+            font-size: 0.85rem;
+            margin-bottom: 10px;
+            color: #64748b;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(37,99,235,.3);
+            border-radius: 50%;
+            border-top-color: var(--primary);
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>🏫 校園課表查詢系統</h1>
+        <div id="statusMsg" class="status-bar">
+            <span class="loading-spinner"></span>正在載入雲端課表資料...
+        </div>
+    </header>
+
+    <div class="search-controls">
+        <select id="searchType" onchange="updateOptions()">
+            <option value="class">按班級查詢</option>
+            <option value="teacher">按教師查詢</option>
+        </select>
+        <select id="targetSelect">
+            <option value="">請稍候...</option>
+        </select>
+        <button onclick="renderTimetable()">開始查詢</button>
+    </div>
+
+    <div class="timetable-wrapper">
+        <h2 id="tableTitle" style="text-align: center; font-size: 1.2rem; color: #1e293b;"></h2>
+        <table id="timetable">
+            <thead>
+                <tr>
+                    <th>節次</th>
+                    <th>週一</th>
+                    <th>週二</th>
+                    <th>週三</th>
+                    <th>週四</th>
+                    <th>週五</th>
+                </tr>
+            </thead>
+            <tbody id="timetableBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    let timetableData = { classes: {}, teachers: {} };
+    // 設定你的 CSV 檔案名稱，請確保該檔案與 index.html 放在 GitHub 同一個資料夾
+    const CSV_FILE_URL = 'data.csv'; 
+
+    // 1. 自動載入：網頁啟動即從 GitHub 抓取檔案
+    window.onload = function() {
+        fetch(CSV_FILE_URL)
+            .then(response => {
+                if (!response.ok) throw new Error('找不到課表檔案 (data.csv)');
+                // 嘗試讀取內容，先抓 ArrayBuffer 以便處理編碼
+                return response.arrayBuffer();
+            })
+            .then(buffer => {
+                // 處理編碼：先嘗試 UTF-8，如果不成再嘗試 Big5
+                const decoderUTF8 = new TextDecoder('utf-8');
+                let content = decoderUTF8.decode(buffer);
+                
+                if (!content.includes('週次')) {
+                    const decoderBig5 = new TextDecoder('big5');
+                    content = decoderBig5.decode(buffer);
+                }
+                
+                parseCSV(content);
+            })
+            .catch(err => {
+                document.getElementById('statusMsg').innerHTML = `<span style="color:red">❌ 載入失敗：${err.message}</span><br><small>請確認 GitHub 儲存庫中存有 data.csv</small>`;
+            });
+    };
+
+    function parseCSV(csvText) {
+        const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== "");
+        const newData = { classes: {}, teachers: {} };
+        
+        // 取得標題並清理 BOM 字元
+        const header = lines[0].split(',').map(h => h.trim().replace(/["'\uFEFF]/g, ''));
+        
+        const findIdx = (ks) => header.findIndex(h => ks.some(k => h.includes(k)));
+        const idx = { 
+            day: findIdx(["週次"]), 
+            period: findIdx(["節次"]), 
+            grade: findIdx(["年級"]), 
+            class: findIdx(["班級"]), 
+            teacher: findIdx(["教師"]), 
+            subject: findIdx(["課程"]) 
+        };
+
+        if (idx.day === -1) {
+            document.getElementById('statusMsg').innerHTML = "❌ CSV 格式不符 (找不到關鍵欄位)";
+            return;
+        }
+
+        const dayMap = { "週一": 0, "週二": 1, "週三": 2, "週四": 3, "週五": 4 };
+        const periodMap = { "第一節": 0, "第二節": 1, "第三節": 2, "第四節": 3, "第五節": 4, "第六節": 5, "第七節": 6, "第八節": 7 };
+
+        for (let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split(',').map(c => c.trim().replace(/"/g, ''));
+            const dIdx = dayMap[cols[idx.day]], pIdx = periodMap[cols[idx.period]];
+            if (dIdx === undefined || pIdx === undefined) continue;
+
+            // 班級識別處理 (例如: 一年級 01班 -> 101)
+            const gradeNum = (str) => {
+                const m = {"一":"1","二":"2","三":"3","四":"4","五":"5","六":"6"};
+                return m[str.charAt(0)] || str.charAt(0);
+            };
+            const cKey = `${gradeNum(cols[idx.grade])}${cols[idx.class].replace(/[^0-9]/g, '').padStart(2, '0')}`;
+            const tea = cols[idx.teacher], sub = cols[idx.subject];
+
+            // 填入班級數據
+            if (!newData.classes[cKey]) newData.classes[cKey] = Array.from({length:8}, ()=>Array(5).fill(null));
+            newData.classes[cKey][pIdx][dIdx] = { sub, tea };
+
+            // 填入教師數據
+            if (tea && tea !== "無") {
+                if (!newData.teachers[tea]) newData.teachers[tea] = Array.from({length:8}, ()=>Array(5).fill(null));
+                newData.teachers[tea][pIdx][dIdx] = { sub, cKey };
+            }
+        }
+
+        timetableData = newData;
+        document.getElementById('statusMsg').innerHTML = "✅ 課表資料已同步最新版本";
+        updateOptions();
+    }
+
+    function updateOptions() {
+        const type = document.getElementById('searchType').value;
+        const select = document.getElementById('targetSelect');
+        const keys = type === 'class' ? Object.keys(timetableData.classes) : Object.keys(timetableData.teachers);
+        
+        select.innerHTML = '';
+        keys.sort().forEach(k => {
+            const opt = document.createElement('option');
+            opt.value = k;
+            opt.textContent = type === 'class' ? `${k} 班` : `${k} 老師`;
+            select.appendChild(opt);
+        });
+    }
+
+    function renderTimetable() {
+        const type = document.getElementById('searchType').value, target = document.getElementById('targetSelect').value;
+        const body = document.getElementById('timetableBody');
+        if (!target) return;
+
+        document.getElementById('tableTitle').innerHTML = `📅 ${target}${type==='class'?'班':'老師'} 課表`;
+        body.innerHTML = '';
+        const schedule = type === 'class' ? timetableData.classes[target] : timetableData.teachers[target];
+        
+        for (let pIdx = 0; pIdx < 8; pIdx++) {
+            if (pIdx === 4) body.innerHTML += `<tr class="lunch-row"><td class="period-cell">12:00</td><td colspan="5">午 休 時 間</td></tr>`;
+            let row = `<tr><td class="period-cell">第 ${pIdx+1} 節</td>`;
+            for (let dIdx = 0; dIdx < 5; dIdx++) {
+                const info = schedule[pIdx][dIdx];
+                row += `<td>${info ? `<span class="subject">${info.sub}</span><span class="teacher-label">${type==='class'?info.tea:info.cKey+'班'}</span>` : '<span style="color:#cbd5e1">-</span>'}</td>`;
+            }
+            body.innerHTML += row + `</tr>`;
+        }
+    }
+</script>
+</body>
+</html>
