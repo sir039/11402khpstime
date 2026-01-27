@@ -240,7 +240,7 @@
         body.innerHTML = '';
         const schedule = type === 'class' ? timetableData.classes[target] : timetableData.teachers[target];
         
-        for (let pIdx = 0; pIdx < 8; pIdx++) {
+        for (let pIdx = 0; pIdx < 7; pIdx++) {
             if (pIdx === 4) body.innerHTML += `<tr class="lunch-row"><td class="period-cell">11:55</td><td colspan="5">午 休 時 間</td></tr>`;
             let row = `<tr><td class="period-cell">第 ${pIdx+1} 節</td>`;
             for (let dIdx = 0; dIdx < 5; dIdx++) {
@@ -254,6 +254,7 @@
 </body>
 
 </html>
+
 
 
 
